@@ -58,6 +58,7 @@ class ConvModule(tf.keras.Model):
                                          name=name +
                                          '_{}'.format(act_cfg['type']))
 
+
     def call(self, x, training=False):
         x = self.conv(x)
         if self.norm:
@@ -170,9 +171,11 @@ class Bottleneck(tf.keras.Model):
         return x
 
 
-class HighResolutionModule(tf.keras.Model):
-    def __init__(self, cfg, multiscale_output=False):
-        super(HighResolutionModule, self).__init__()
+class HRModule(tf.keras.Model):
+    def __init__(self, cfg, module_idx, multiscale_output=True):
+        super(HRModule, self).__init__()
+        self.stage_name = cfg['name']
+        self.module_idx = module_idx
         self.weight_decay = cfg.get('weight_decay', 1e-4)
         self.norm_cfg = cfg.get('norm_cfg', None)
         self.act_cfg = cfg.get('act_cfg', None)
@@ -185,25 +188,27 @@ class HighResolutionModule(tf.keras.Model):
         self.branches = self._make_branches()
         self.fuse_layers = self._make_fuse_layers()
 
+
     def _make_branch(self, branch_level):
         blocks = []
+        branch_name = 'hrm_{}_module{}_branch{}'.format(self.stage_name, self.module_idx, branch_level)
         for block_index in range(self.num_blocks[branch_level]):
-            block_name = 'hrm_{}_{}_{}'.format(len(self.num_channels),
-                                                branch_level,
-                                                block_index)
+            block_name = '{}_block{}'.format(branch_name, block_index)
             blocks.append(
                 BasicBlock(self.num_channels[branch_level],
                            self.norm_cfg,
                            self.act_cfg,
                            self.weight_decay,
                            name=block_name))
-        return blocks
+        return tf.keras.Sequential(blocks, name=branch_name)
+
 
     def _make_branches(self):
         branches = []
         for i in range(self.num_branches):
             branches.append(self._make_branch(i))
         return branches
+
 
     def _make_fuse_layers(self):
         if self.num_branches == 1:
@@ -223,7 +228,7 @@ class HighResolutionModule(tf.keras.Model):
                                           norm_cfg=self.norm_cfg,
                                           act_cfg=self.act_cfg,
                                           name='fuse_{}_{}_{}'.format(
-                                              self.num_branches, j, i))
+                                              self.stage_name, j, i))
                     upsample = layers.UpSampling2D(size=(2**(j - i),
                                                          2**(j - i)),
                                                    interpolation='bilinear')
@@ -232,8 +237,9 @@ class HighResolutionModule(tf.keras.Model):
                     fuse_layer.append(None)
                 else:  # downsample 3x3 stride 2
                     down_layers = []
-                    for k in range(i - j):
-                        if k == i - j - 1:
+                    for k in range(i-j):
+                        if k == i-j-1:
+                            down_name = 'fusedown_{}_{}_{}'.format(self.stage_name, j, i)
                             conv_mod = ConvModule(
                                 self.num_channels[i],
                                 3,
@@ -243,7 +249,7 @@ class HighResolutionModule(tf.keras.Model):
                                 weight_decay=self.weight_decay,
                                 norm_cfg=self.norm_cfg,
                                 act_cfg=None,
-                                name='fuse_{}_{}_{}'.format(self.num_branches, j, i))
+                                name=down_name)
                         else:
                             conv_mod = ConvModule(
                                 self.num_channels[j],
@@ -254,11 +260,12 @@ class HighResolutionModule(tf.keras.Model):
                                 weight_decay=self.weight_decay,
                                 norm_cfg=self.norm_cfg,
                                 act_cfg=self.act_cfg,
-                                name='fuse_{}_{}_{}'.format(self.num_branches, j, i))
+                                name=down_name)
                         down_layers.append(conv_mod)
                     fuse_layer.append(tf.keras.Sequential(down_layers))
             fuse_layers.append(fuse_layer)
         return fuse_layers
+
 
     def call(self, x, training=False):
         for i in range(self.num_branches):
@@ -269,13 +276,14 @@ class HighResolutionModule(tf.keras.Model):
         for i in range(len(self.fuse_layers)):
             y = x[0]
             if i > 0:
-                y = self.fuse_layers[i][0](x[0])
+                y = self.fuse_layers[i][0](x[0], training=training)
             for j in range(1, self.num_branches):
                 if i == j:
                     y = y + x[j]
                 else:
-                    y = y + self.fuse_layers[i][j](x[j])
-                x_fuse.append(tf.nn.relu(y))
+                    y = y + self.fuse_layers[i][j](x[j], training=training)
+            x_fuse.append(tf.nn.relu(y))
+
         return x_fuse
 
 
@@ -314,15 +322,15 @@ class Stem(tf.keras.Model):
         x = self.conv_mod2(x, training=training)
         return x
 
+
 class Transition(tf.keras.Model):
-    def __init__(self, cfg, prev_layer_branches, prev_layer_channels):
-        super(Transition, self).__init__()
+    def __init__(self, cfg, prev_layer_branches, prev_layer_channels, name=None):
+        super(Transition, self).__init__(name=name)
         wd = cfg['weight_decay']
         norm_cfg = cfg.get('norm_cfg', None)
         act_cfg = cfg.get('act_cfg', None)
         self.num_branches = cfg['num_branches']
         curr_stage_channels = cfg['num_channels']
-        print(prev_layer_channels, curr_stage_channels)
         self.transition_layers = []
         for i in range(self.num_branches):
             if i < prev_layer_branches:
@@ -339,9 +347,7 @@ class Transition(tf.keras.Model):
                                              len(curr_stage_channels) - 1,
                                              i + 1))
                     self.transition_layers.append(convmod)
-                    print('transition from', prev_layer_channels[i], 'to', curr_stage_channels[i])
                 else:
-                    print('no transition')
                     self.transition_layers.append(None)  # pass input as is
             else:
                 # this handles the new branch(es) in the current stage
@@ -362,25 +368,23 @@ class Transition(tf.keras.Model):
                                          name='new_transition_{}_{}'.format(
                                              len(curr_stage_channels) - 1,
                                              i + 1))
-                    print('extra transition from', prev_layer_channels[-1], 'to', channels)
                     new_transitions.append(convmod)
-                self.transition_layers.append(tf.keras.Sequential(*new_transitions))
+                self.transition_layers.append(tf.keras.Sequential(new_transitions))
 
     def call(self, x, training=False):
         outputs = []
-        for tl in self.transition_layers:
+        for i, tl in enumerate(self.transition_layers):
             if tl:
-                outputs.append(tl(x, training=training))
+                transition = tl(x[-1], training=training)
+                outputs.append(transition)
             else:
-                outputs.append(x)
-        for o in outputs:
-            print(o.shape)
+                outputs.append(x[i])
         return outputs
 
 
 class Front(tf.keras.Model):
     def __init__(self, cfg, expansion=4):
-        super(Front, self).__init__()
+        super(Front, self).__init__(name=cfg['name'])
         wd = cfg['weight_decay']
         norm_cfg = cfg.get('norm_cfg', None)
         act_cfg = cfg.get('act_cfg', None)
@@ -402,7 +406,7 @@ class Front(tf.keras.Model):
             Bottleneck(channels,
                        norm_cfg,
                        act_cfg,
-                       name='bottleneck_1',
+                       name='front_bottleneck_1',
                        weight_decay=wd,
                        stride=1,
                        downsample=downsample))
@@ -411,7 +415,7 @@ class Front(tf.keras.Model):
                 Bottleneck(channels,
                            norm_cfg,
                            act_cfg,
-                           name='bottleneck_{}'.format(i + 1),
+                           name='front_bottleneck_{}'.format(i + 1),
                            weight_decay=wd,
                            stride=1,
                            downsample=None))
@@ -420,6 +424,7 @@ class Front(tf.keras.Model):
         for block in self.blocks:
             x = block(x, training=training)
         return x
+
 
 class BottleneckStage(tf.keras.Model):
     def __init__(self,
@@ -445,7 +450,7 @@ class BottleneckStage(tf.keras.Model):
             Bottleneck(channels,
                        norm_cfg,
                        act_cfg,
-                       name='bottleneck_1',
+                       name='cls_bottleneck_1',
                        weight_decay=weight_decay,
                        stride=1,
                        downsample=downsample))
@@ -454,7 +459,7 @@ class BottleneckStage(tf.keras.Model):
                 Bottleneck(channels,
                            norm_cfg,
                            act_cfg,
-                           name='bottleneck_{}'.format(i + 1),
+                           name='cls_bottleneck_{}'.format(i + 1),
                            weight_decay=weight_decay,
                            stride=1,
                            downsample=None))
@@ -464,23 +469,28 @@ class BottleneckStage(tf.keras.Model):
             x = block(x, training=training)
         return x
 
+
 class Stage(tf.keras.Model):
     def __init__(self, cfg, multiscale_output=True):
-        super(Stage, self).__init__()
+        super(Stage, self).__init__(name=cfg['name'])
         self.num_modules = cfg['num_modules']
         self.num_branches = cfg['num_branches']
         self.modules = []
-        for i in range(self.num_modules):
-            hr_module = HighResolutionModule(
-                cfg, multiscale_output=(i == self.num_modules - 1))
+        for module_idx in range(self.num_modules):
+            if not multiscale_output and module_idx == self.num_modules-1:
+                multiscale_output = False
+            else:
+                multiscale_output = True
+
+            hr_module = HRModule(
+                cfg, module_idx, multiscale_output=multiscale_output)
             self.modules.append(hr_module)
 
     def call(self, x_list, training=False):
         out = x_list
         for module in self.modules:
-            out = module(out, training=training)
-            print(out.shape, 'sssss')
-        return out
+            out_list = module(out, training=training)
+        return out_list
 
 
 class ClsHead(tf.keras.Model):
@@ -526,18 +536,23 @@ class ClsHead(tf.keras.Model):
                                       name='final_{}'.format(i))
         self.classifier = layers.Dense(num_classes)
 
+    def call(self, x_list, training=False):
+        y = self.width_incr_layers[0](x_list[0], training=training)
+        for i in range(1, len(self.downsample_layers)+1):
+            y = self.width_incr_layers[i](x_list[i], training=training) + self.downsample_layers[i-1](y, training=training)
 
-    def call(self, x, training=False):
-        pass  #TODO
+        y = self.final_layer(y)
+        y = layers.GlobalAveragePooling2D()(y)
+        y = self.classifier(y)
+        return y
 
 
-class HighResolutionNet(tf.keras.Model):
+class HRNet(tf.keras.Model):
     def __init__(self, model_cfg):
-        super(HighResolutionNet, self).__init__()
+        super(HRNet, self).__init__()
 
         # stem
         self.stem = Stem(model_cfg['stem'])
-        print('created Stem')
         # stages
         self.stages = []
         self.transitions = []
@@ -546,41 +561,44 @@ class HighResolutionNet(tf.keras.Model):
             if s == 1:
                 # bottleneck units
                 self.stages.append(Front(stage_cfg))
-                print('created Stage ', s)
             else:
                 # basic units
                 prev_stage_cfg = model_cfg['stage{}'.format(s - 1)]
                 prev_layer_branches = prev_stage_cfg['num_branches']
                 prev_layer_channels = [prev_stage_cfg['expansion'] * c for c in prev_stage_cfg['num_channels']]
-                self.transitions.append(Transition(stage_cfg, prev_layer_branches, prev_layer_channels))
-                print('created Transition from ', s-1, s)
+                trans_name = 'transition_{}_{}'.format(s-1, s)
+                self.transitions.append(Transition(stage_cfg, prev_layer_branches, prev_layer_channels, name=trans_name))
                 self.stages.append(Stage(stage_cfg))
-                print('created Stage ', s)
 
         # classification head
         head_cfg = model_cfg['head']
         self.cls_head = ClsHead(head_cfg)
-        print('created Classification head')
 
 
     def call(self, x, training=False):
         x = self.stem(x, training=training)
         front = self.stages[0]
         stage1_output = front(x, training=training)
-        print('front output', stage1_output.shape)
         transition12 = self.transitions[0]
         stage2 = self.stages[1]
-        stage1_transitions = transition12(stage1_output, training=training)
-        stage2_outputs = stage2(stage1_transitions) # list
-
-
-        pass  #TODO
-        return x
+        stage1_transitions = transition12([stage1_output], training=training)
+        stage2_outputs = stage2(stage1_transitions, training=training)
+        transition23 = self.transitions[1]
+        stage3 = self.stages[2]
+        stage2_transitions = transition23(stage2_outputs, training=training)
+        stage3_outputs = stage3(stage2_transitions, training=training)
+        transition34 = self.transitions[2]
+        stage4 = self.stages[3]
+        stage3_transitions = transition34(stage3_outputs, training=training)
+        stage4_outputs = stage4(stage3_transitions, training=training)
+        # classification
+        y = self.cls_head(stage4_outputs)
+        return y
 
 
 def test_hrnet():
     # CONFIG
-    model = dict(type='HighResolutionNet',
+    model = dict(type='HRNet',
                  num_stages=4,
                  stem=dict(
                      channels=64,
@@ -598,6 +616,7 @@ def test_hrnet():
                      weight_decay=1e-5,
                  ),
                  stage1=dict(
+                     name='s1',
                      num_modules=1,
                      num_branches=1,
                      num_blocks=(4, ),
@@ -613,6 +632,7 @@ def test_hrnet():
                      weight_decay=1e-5,
                  ),
                  stage2=dict(
+                     name='s2',
                      num_modules=1,
                      num_branches=2,
                      num_blocks=(4, 4),
@@ -628,6 +648,7 @@ def test_hrnet():
                      weight_decay=1e-5,
                  ),
                  stage3=dict(
+                     name='s3',
                      num_modules=4,
                      num_branches=3,
                      num_blocks=(4, 4, 4),
@@ -643,6 +664,7 @@ def test_hrnet():
                      weight_decay=1e-5,
                  ),
                  stage4=dict(
+                     name='s4',
                      num_modules=3,
                      num_branches=4,
                      num_blocks=(4, 4, 4, 4),
@@ -658,6 +680,7 @@ def test_hrnet():
                      weight_decay=1e-5,
                  ),
                  head=dict(
+                     name='cls_head',
                      channels=(32, 64, 128, 256),
                      expansion = 4,
                      act_cfg=dict(type='relu', ),
@@ -687,7 +710,6 @@ def test_hrnet():
             mean=(),
             std=(),
         ),
-
         val=dict(
             type=dataset_type,
             train=False,
@@ -725,7 +747,7 @@ def test_hrnet():
     work_dir = './work_dirs/hrnet_w32_cls'
     resume_from = None
 
-    hrnet = HighResolutionNet(model)
+    hrnet = HRNet(model)
     # pass dummy data
     x = tf.random.uniform([8, 224, 224, 3])
     out = hrnet(x)
