@@ -16,7 +16,7 @@ import tensorflow as tf
 layers = tf.keras.layers
 
 
-class ConvModule(tf.keras.Model):
+class ConvModule(layers.Layer):
     """
     Module that combines convolutional layer, norm layer, and activation
     Order of layers is currently set to conv, norm, act
@@ -68,7 +68,7 @@ class ConvModule(tf.keras.Model):
         return x
 
 
-class BasicBlock(tf.keras.Model):
+class BasicBlock(layers.Layer):
     def __init__(self,
                  channels,
                  norm_cfg,
@@ -107,14 +107,14 @@ class BasicBlock(tf.keras.Model):
         x = self.conv_mod2(x, training=training)
 
         if self.downsample:
-            residual = self.downsample(x, training=training)
+            residual = self.downsample(residual, training=training)
 
         x = x + residual
         x = tf.nn.relu(x)
         return x
 
 
-class Bottleneck(tf.keras.Model):
+class Bottleneck(layers.Layer):
     def __init__(self,
                  channels,
                  norm_cfg,
@@ -164,14 +164,14 @@ class Bottleneck(tf.keras.Model):
         x = self.conv_mod3(x, training=training)
 
         if self.downsample:
-            residual = self.downsample(x, training=training)
+            residual = self.downsample(residual, training=training)
 
         x = x + residual
         x = tf.nn.relu(x)
         return x
 
 
-class HRModule(tf.keras.Model):
+class HRModule(layers.Layer):
     def __init__(self, cfg, module_idx, multiscale_output=True):
         super(HRModule, self).__init__()
         self.stage_name = cfg['name']
@@ -287,7 +287,7 @@ class HRModule(tf.keras.Model):
         return x_fuse
 
 
-class Stem(tf.keras.Model):
+class Stem(layers.Layer):
     def __init__(self, cfg):
         super(Stem, self).__init__()
         filters = cfg['channels']
@@ -323,7 +323,7 @@ class Stem(tf.keras.Model):
         return x
 
 
-class Transition(tf.keras.Model):
+class Transition(layers.Layer):
     def __init__(self, cfg, prev_layer_branches, prev_layer_channels, name=None):
         super(Transition, self).__init__(name=name)
         wd = cfg['weight_decay']
@@ -371,6 +371,7 @@ class Transition(tf.keras.Model):
                     new_transitions.append(convmod)
                 self.transition_layers.append(tf.keras.Sequential(new_transitions))
 
+
     def call(self, x, training=False):
         outputs = []
         for i, tl in enumerate(self.transition_layers):
@@ -382,7 +383,7 @@ class Transition(tf.keras.Model):
         return outputs
 
 
-class Front(tf.keras.Model):
+class Front(layers.Layer):
     def __init__(self, cfg, expansion=4):
         super(Front, self).__init__(name=cfg['name'])
         wd = cfg['weight_decay']
@@ -426,7 +427,7 @@ class Front(tf.keras.Model):
         return x
 
 
-class BottleneckStage(tf.keras.Model):
+class BottleneckStage(layers.Layer):
     def __init__(self,
                  channels,
                  num_blocks,
@@ -470,7 +471,7 @@ class BottleneckStage(tf.keras.Model):
         return x
 
 
-class Stage(tf.keras.Model):
+class Stage(layers.Layer):
     def __init__(self, cfg, multiscale_output=True):
         super(Stage, self).__init__(name=cfg['name'])
         self.num_modules = cfg['num_modules']
@@ -489,11 +490,11 @@ class Stage(tf.keras.Model):
     def call(self, x_list, training=False):
         out = x_list
         for module in self.modules:
-            out_list = module(out, training=training)
-        return out_list
+            out = module(out, training=training)
+        return out
 
 
-class ClsHead(tf.keras.Model):
+class ClsHead(layers.Layer):
     def __init__(self, cfg, expansion=4):
         super(ClsHead, self).__init__()
         channels = cfg['channels']
@@ -534,7 +535,10 @@ class ClsHead(tf.keras.Model):
                                       norm_cfg=norm_cfg,
                                       act_cfg=act_cfg,
                                       name='final_{}'.format(i))
-        self.classifier = layers.Dense(num_classes)
+        self.classifier = layers.Dense(num_classes,
+                kernel_initializer=tf.keras.initializers.TruncatedNormal(stddev=0.01),
+                kernel_regularizer=tf.keras.regularizers.l2(weight_decay), name='logits')
+
 
     def call(self, x_list, training=False):
         y = self.width_incr_layers[0](x_list[0], training=training)
@@ -544,6 +548,7 @@ class ClsHead(tf.keras.Model):
         y = self.final_layer(y)
         y = layers.GlobalAveragePooling2D()(y)
         y = self.classifier(y)
+        y = layers.Activation('softmax', dtype='float32')(y)
         return y
 
 
@@ -596,7 +601,7 @@ class HRNet(tf.keras.Model):
         return y
 
 
-def test_hrnet():
+def build_hrnet():
     # CONFIG
     model = dict(type='HRNet',
                  num_stages=4,
@@ -610,8 +615,8 @@ def test_hrnet():
                      norm_cfg=dict(
                          type='BN',
                          axis=-1,
-                         momentum=0.9,
-                         eps=1e-4,
+                         momentum=0.99,
+                         eps=1e-5,
                      ),
                      weight_decay=1e-5,
                  ),
@@ -626,8 +631,8 @@ def test_hrnet():
                      norm_cfg=dict(
                          type='BN',
                          axis=-1,
-                         momentum=0.9,
-                         eps=1e-4,
+                         momentum=0.99,
+                         eps=1e-5,
                      ),
                      weight_decay=1e-5,
                  ),
@@ -642,8 +647,8 @@ def test_hrnet():
                      norm_cfg=dict(
                          type='BN',
                          axis=-1,
-                         momentum=0.9,
-                         eps=1e-4,
+                         momentum=0.99,
+                         eps=1e-5,
                      ),
                      weight_decay=1e-5,
                  ),
@@ -658,8 +663,8 @@ def test_hrnet():
                      norm_cfg=dict(
                          type='BN',
                          axis=-1,
-                         momentum=0.9,
-                         eps=1e-4,
+                         momentum=0.99,
+                         eps=1e-5,
                      ),
                      weight_decay=1e-5,
                  ),
@@ -674,8 +679,8 @@ def test_hrnet():
                      norm_cfg=dict(
                          type='BN',
                          axis=-1,
-                         momentum=0.9,
-                         eps=1e-4,
+                         momentum=0.99,
+                         eps=1e-5,
                      ),
                      weight_decay=1e-5,
                  ),
@@ -687,8 +692,8 @@ def test_hrnet():
                      norm_cfg=dict(
                          type='BN',
                          axis=-1,
-                         momentum=0.9,
-                         eps=1e-4,
+                         momentum=0.99,
+                         eps=1e-5,
                      ),
                      weight_decay=1e-5,
                  ))
@@ -748,11 +753,12 @@ def test_hrnet():
     resume_from = None
 
     hrnet = HRNet(model)
-    # pass dummy data
+    # pass dummy data to init network
     x = tf.random.uniform([8, 224, 224, 3])
-    out = hrnet(x)
-    hrnet.summary()
-
+    _ = hrnet(x)
+    # hrnet.summary()
+    return hrnet
 
 if __name__ == "__main__":
-    test_hrnet()
+    build_hrnet()
+
