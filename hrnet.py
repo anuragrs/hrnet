@@ -27,8 +27,7 @@ class ConvModule(layers.Layer):
                  stride,
                  padding='same',
                  use_bias=False,
-                 kernel_initializer=tf.keras.initializers.VarianceScaling(
-                     2.0, mode='fan_out'),
+                 kernel_initializer=tf.keras.initializers.VarianceScaling(2.0, mode='fan_out'),
                  weight_decay=1e-4,
                  norm_cfg=None,
                  act_cfg=None,
@@ -189,7 +188,7 @@ class HRModule(layers.Layer):
         self.multiscale_output = multiscale_output
         self.branches = self._make_branches()
         self.fuse_layers = self._make_fuse_layers()
-        print('HR Module:', self.stage_name, 'branches:', self.num_branches, 'fuse layers:', len(self.fuse_layers))
+
 
     def _make_branch(self, branch_level):
         blocks = []
@@ -535,7 +534,7 @@ class ClsHead(layers.Layer):
                                       act_cfg=act_cfg,
                                       name='final_{}'.format(i))
         self.classifier = layers.Dense(num_classes,
-                kernel_initializer=tf.keras.initializers.TruncatedNormal(stddev=0.01),
+                kernel_initializer=tf.keras.initializers.VarianceScaling(),
                 kernel_regularizer=tf.keras.regularizers.l2(weight_decay), name='logits')
 
 
@@ -608,6 +607,7 @@ class HRNet(tf.keras.Model):
         # classification
         y = self.cls_head(stage4_outputs)
         t9 = tf.timestamp()
+        """
         tf.print('stem', t1-t0)
         tf.print('stage1', t2-t1)
         tf.print('trans12', t3-t2)
@@ -617,6 +617,7 @@ class HRNet(tf.keras.Model):
         tf.print('trans34', t7-t6)
         tf.print('stage4', t8-t7)
         tf.print('head', t9-t8)
+        """
         return y
 
 
@@ -637,7 +638,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  stage1=dict(
                      name='s1',
@@ -653,7 +654,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  stage2=dict(
                      name='s2',
@@ -669,7 +670,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  stage3=dict(
                      name='s3',
@@ -685,7 +686,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  stage4=dict(
                      name='s4',
@@ -701,7 +702,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  head=dict(
                      name='cls_head',
@@ -714,7 +715,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ))
 
     # CONFIG W18C
@@ -733,7 +734,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  stage1=dict(
                      name='s1',
@@ -749,7 +750,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  stage2=dict(
                      name='s2',
@@ -765,7 +766,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  stage3=dict(
                      name='s3',
@@ -781,7 +782,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  stage4=dict(
                      name='s4',
@@ -797,7 +798,7 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ),
                  head=dict(
                      name='cls_head',
@@ -810,12 +811,12 @@ def build_hrnet():
                          momentum=0.9,
                          eps=1e-5,
                      ),
-                     weight_decay=1e-4,
+                     weight_decay=5e-5,
                  ))
 
 
 
-    train_cfg = dict(weight_decay=1e-4, )
+    train_cfg = dict(weight_decay=5e-5, )
     dataset_type = 'imagenet'
     dataset_mean = ()
     dataset_std = ()
